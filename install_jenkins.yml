@@ -1,0 +1,90 @@
+---
+- name: Install Jenkins
+  hosts: jenkins
+
+  tasks:
+  - debug:
+      msg: "Ansible running on host {{ inventory_hostname }}"
+
+  - name: Add docker repo key
+    shell: curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
+    become: yes
+
+  - name: Add docker repo
+    shell: add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    become: yes
+
+  - name: apt-get update
+    apt:
+      update_cache: yes
+    become: yes
+
+  - name: Install docker-ce
+    apt:
+      name: docker-ce
+      state: latest
+    become: yes
+
+  - name: Add user to docker group
+    shell: "usermod -aG docker {{ ansible_user }}"
+    become: yes
+
+  - name: Install pip
+    apt:
+      name: python-pip
+      state: latest
+    become: yes
+    
+  - name: Install docker-py
+    pip: 
+      name: docker-py
+
+  - name: Ensures /home/ubuntu/jenkins dir exists
+    file: path=/home/ubuntu/jenkins state=directory
+ 
+  - name: Copy Dockerfile
+    copy:
+      src: Dockerfile
+      dest: /home/ubuntu/jenkins/Dockerfile
+
+  - name: Copy plugins.txt
+    copy:
+      src: plugins.txt
+      dest: /home/ubuntu/jenkins/plugins.txt
+
+  - shell: "echo `getent group docker | cut -d: -f3`"
+    register: docker_group_id
+
+  - debug:
+      msg: "docker_group_id: {{ docker_group_id }}"
+
+  - name: Build jenkins container
+    docker_image:
+      path: /home/ubuntu/jenkins/
+      name: jenkins-blueocean-gerrit
+      buildargs:
+        DOCKER_GROUP_ID: "{{ docker_group_id.stdout }}"
+
+  - name: Ensures /home/ubuntu/jenkins/jenkins_home dir exists
+    file: path=/home/ubuntu/jenkins/jenkins_home state=directory
+
+  - name: Run Jenkins container
+    docker_container:
+      name: jenkins
+      image: jenkins-blueocean-gerrit
+      state: started
+      ports:
+        - "8080:8080"
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+        - /home/ubuntu/jenkins/jenkins_home:/var/jenkins_home
+        - /home/ubuntu/jenkins/plugins.txt:/usr/share/jenkins/ref/plugins.txt
+      groups:
+        - "{{ docker_group_id.stdout }}"
+      recreate: yes
+
+  - shell: docker exec -i jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+    register: admin_pass
+  
+  - debug:
+      msg: 'Initial admin password: {{ admin_pass.stdout }}'
